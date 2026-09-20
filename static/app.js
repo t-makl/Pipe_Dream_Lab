@@ -4,7 +4,54 @@ const canvas = $('canvas'), ctx = canvas.getContext('2d'), viewport = $('viewpor
 let doc = null, west = [], south = [], overview = null, cell = 28, ox = 48, oy = 48;
 let width = 1, height = 1, selected = null, history = [], busy = false, drag = null, frame = 0;
 let inspectedTile = null;
-const margin = 35;
+const bandSize=36;
+let axisView='both', margin=bandSize*2, topPipes=[], coordinateMode='grid', lastInspection=null;
+function axisBands(){return axisView==='both'?['pipe','edge']:[axisView];}
+function axisValue(kind,axis,index){return kind==='pipe'?(axis==='x'?topPipes[index]:index+1):(axis==='x'?index+1:doc.n-index);}
+function axisHit(x,y){
+  if(!doc)return null;
+  const axis=y>=0&&y<margin&&x>=margin?'x':x>=0&&x<margin&&y>=margin?'y':null;
+  if(!axis)return null;
+  const index=Math.floor(((axis==='x'?x:y)-(axis==='x'?ox:oy))/cell);
+  if(index<0||index>=doc.n)return null;
+  const kind=axisBands()[Math.floor((axis==='x'?y:x)/bandSize)];
+  return {axis,kind,index,value:axisValue(kind,axis,index)};
+}
+function targetExit(p,n){return p<=2||p>=n-1?p:n+1-p;}
+function selectedCoordinates(){
+  const mode=$('coordinates').value||'grid';
+  if(!['grid','pipe','edge'].includes(mode))throw new Error('Choose Grid, Black, or Blue turn coordinates.');
+  return mode;
+}
+function convertTurns(turns,n,from,to){
+  if(!Number.isInteger(n)||n<5||n>1000)throw new Error('N must be an integer between 5 and 1000.');
+  if(!Array.isArray(turns))throw new Error('Turns must be an array of coordinate pairs.');
+  return turns.map(point=>{
+    if(!Array.isArray(point)||point.length!==2||point.some(v=>!Number.isInteger(v)||v<1||v>n))throw new Error('Coordinates must be integer pairs between 1 and N.');
+    let [r,c]=point;
+    if(from==='edge')r=n+1-r;
+    if(from==='pipe')c=targetExit(c,n);
+    return [to==='edge'?n+1-r:r,to==='pipe'?targetExit(c,n):c];
+  });
+}
+function prescribedInput(){
+  const input=generationInput();
+  const mode=selectedCoordinates();
+  const turns=convertTurns(JSON.parse($('turns').value),input.n,mode,'grid');
+  if(turns.length!==5)throw new Error('Supply exactly five ordered turn coordinates.');
+  // The first turn fixes the entrance row; a previous pipe selection must not
+  // override the path, especially when Y is a reversed blue edge label.
+  const pipe=turns[0][0];
+  $('pipe').value=pipe;coordinateMode=mode;
+  return {...input,pipe,turns};
+}
+function updateEntranceFromTurns(){
+  try{
+    const turns=convertTurns(JSON.parse($('turns').value),Number($('n').value),selectedCoordinates(),'grid');
+    if(turns.length)$('pipe').value=turns[0][0];
+  }catch{/* Allow partially typed JSON; submission reports validation errors. */}
+}
+function tileLabels(r,c){return `Grid (${r+1}, ${c+1})\nBlack pipe axes (${r+1}, ${topPipes[c]||'boundary'})\nBlue edge axes (${doc.n-r}, ${c+1})`;}
 function status(message, error = false) { $('status').textContent = message; $('status').className = error ? 'error' : ''; }
 async function api(path, data) {
   const response = await fetch(path, data === undefined ? {} : {
@@ -46,7 +93,7 @@ function showTileInfo() {
   const {r,c}=inspectedTile, cross=doc.rows[r][c]==='1';
   const label=p=>p ? `Pipe ${p}` : 'Outer boundary (no numbered pipe)';
   $('tile-title').textContent=`Tile (${r+1}, ${c+1}) · ${cross ? 'Cross' : 'Elbow'}`;
-  $('tile-pipes').textContent=`${label(west[r][c])}: ${cross ? 'west → east' : 'west → north'}\n${label(south[r][c])}: ${cross ? 'south → north' : 'south → east'}`;
+  $('tile-pipes').textContent=`${tileLabels(r,c)}\n${label(west[r][c])}: ${cross ? 'west → east' : 'west → north'}\n${label(south[r][c])}: ${cross ? 'south → north' : 'south → east'}`;
 }
 function annotations() {
   const a = doc.annotations || {};
@@ -71,6 +118,7 @@ function buildRouting() {
       if (doc.rows[r][c] === '0') { const next = below[c]; below[c] = left; left = next; }
     }
   }
+  topPipes=Array.from(below);
   makeOverview();
 }
 function makeOverview() {
@@ -89,6 +137,11 @@ function makeOverview() {
 function adopt(next, reset = false) {
   doc = next; annotations(); buildRouting(); $('empty').hidden = true;
   $('n').value = doc.n;
+  coordinateMode=selectedCoordinates();
+  if(doc.constraint){
+    $('pipe').value=doc.constraint.pipe;
+    $('turns').value=JSON.stringify(convertTurns(doc.constraint.turns,doc.n,'grid',coordinateMode));
+  }
   $('seed').placeholder = doc.seed == null ? 'Random' : `Last: ${doc.seed}`;
   const stats = doc.randomization;
   $('move-summary').textContent = stats ?
@@ -98,7 +151,8 @@ function adopt(next, reset = false) {
   $('badge').textContent = v.valid ? 'Valid reduced diagram' : 'Edited · invalid for w₀,₂';
   $('badge').className = v.valid ? '' : 'invalid';
   $('counts').textContent = `${doc.n.toLocaleString()} pipes · ${v.crosses.toLocaleString()} crosses`;
-  if (reset) { history = []; inspectedTile=null; selected=null; $('inspection').textContent='Select a pipe to see its turns.'; fit(); } else draw();
+  lastInspection=null;$('inspection').textContent='Select a pipe to see its turns.';
+  if (reset) { history = []; inspectedTile=null; selected=null; fit(); } else draw();
   $('menu').hidden=true;showTileInfo();updateUndo();
   status(v.valid ? 'Permutation and reducedness verified.' : `Target: ${v.matches_target ? 'yes' : 'no'} · Reduced: ${v.reduced ? 'yes' : 'no'}`);
 }
@@ -150,14 +204,19 @@ function render() {
   ctx.fillStyle='#f6f8f4';ctx.fillRect(0,0,width,margin);ctx.fillRect(0,0,margin,height);
   ctx.font='11px Segoe UI';ctx.textAlign='center';ctx.textBaseline='middle';
   const stride=Math.max(1,Math.ceil(30/cell));
-  for(let i=0;i<doc.n;i++) if(i%stride===0 || i===doc.n-1) {
-    const x=ox+(i+.5)*cell,y=oy+(i+.5)*cell;
-    if(x>=margin&&x<width){ctx.fillStyle=a.columns[i+1]||'#748a7d';ctx.fillText(i+1,x,margin/2);}
-    if(y>=margin&&y<height){ctx.fillStyle=a.rows[i+1]||'#748a7d';ctx.fillText(i+1,margin/2,y);}
-  }
+  axisBands().forEach((kind,band)=>{
+    const center=(band+.5)*bandSize;
+    ctx.fillStyle=kind==='pipe'?'#111111':'#1565c0';
+    for(let i=0;i<doc.n;i++) if(i%stride===0 || i===doc.n-1){
+      const x=ox+(i+.5)*cell,y=oy+(i+.5)*cell;
+      if(x>=margin&&x<width)ctx.fillText(axisValue(kind,'x',i)||'–',x,center);
+      if(y>=margin&&y<height)ctx.fillText(axisValue(kind,'y',i),center,y);
+    }
+    ctx.strokeStyle='#dbe3dc';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,(band+1)*bandSize);ctx.lineTo(width,(band+1)*bandSize);ctx.moveTo((band+1)*bandSize,0);ctx.lineTo((band+1)*bandSize,height);ctx.stroke();
+  });
   $('zoom').textContent=cell<6?'Overview':`${Math.round(cell/28*100)}%`;
 }
-function fit(){if(!doc)return;cell=Math.max(.2,Math.min(40,(width-70)/doc.n,(height-70)/doc.n));ox=oy=margin+10;draw();}
+function fit(){if(!doc)return;width=viewport.clientWidth||width;height=viewport.clientHeight||height;cell=Math.max(.2,Math.min(40,(width-margin-25)/doc.n,(height-margin-25)/doc.n));ox=oy=margin+10;draw();}
 function zoom(factor,x=width/2,y=height/2){const next=Math.min(100,Math.max(.2,cell*factor));ox=x-(x-ox)*next/cell;oy=y-(y-oy)*next/cell;cell=next;draw();}
 new ResizeObserver(()=>{width=viewport.clientWidth;height=viewport.clientHeight;const dpr=window.devicePixelRatio||1;canvas.width=width*dpr;canvas.height=height*dpr;draw();}).observe(viewport);
 canvas.addEventListener('wheel',e=>{e.preventDefault();zoom(Math.exp(-e.deltaY*.002),e.offsetX,e.offsetY);},{passive:false});
@@ -171,17 +230,21 @@ canvas.addEventListener('pointercancel',()=>drag=null);
 canvas.addEventListener('contextmenu',e=>{
   e.preventDefault();if(!doc||busy)return;
   const x=e.offsetX,y=e.offsetY,r=Math.floor((y-oy)/cell),c=Math.floor((x-ox)/cell);
+  const axis=axisHit(x,y);
   let pipe=0;
   const tile=x>=margin&&y>=margin&&r>=0&&r<doc.n&&c>=0&&c<doc.n-r;
   if(tile){const dx=(x-ox)/cell-c,dy=(y-oy)/cell-r;
     const branch=doc.rows[r][c]==='1' ? (Math.abs(dy-.5)<=Math.abs(dx-.5)?0:1) : (dx+dy<1?0:1);
     pipe=branch===0?west[r][c]:south[r][c];}
-  const axisRow=x<margin&&r>=0&&r<doc.n,axisColumn=y<margin&&c>=0&&c<doc.n;
+  const axisRow=axis?.axis==='y',axisColumn=axis?.axis==='x';
+  if(axis?.kind==='pipe')pipe=axis.value;
   if(!tile&&!axisRow&&!axisColumn)return;
   selected={r,c,pipe,tile};
   if(tile){inspectedTile={r,c};showTileInfo();draw();}
-  $('location').textContent=tile?`(${r+1}, ${c+1}) · Pipe ${pipe||'boundary'}`:axisRow?`Row ${r+1}`:`Column ${c+1}`;
+  $('location').textContent=tile?`${tileLabels(r,c)}\nSelected pipe ${pipe||'boundary'}`:`${axis.kind==='pipe'?'Black pipe':'Blue edge'} ${axis.value} · ${axisRow?'Y':'X'} axis\n${axisRow?'Row':'Column'} ${axis.index+1}`;
   $('color-pipe').textContent=`Color pipe ${pipe}`;
+  $('color-row').textContent=`Color row ${r+1}${axisRow?' ('+(axis.kind==='pipe'?'pipe ':'edge ')+axis.value+')':''}`;
+  $('color-column').textContent=`Color column ${c+1}${axisColumn?' ('+(axis.kind==='pipe'?'pipe ':'edge ')+axis.value+')':''}`;
   document.querySelectorAll('#menu button').forEach(b=>{
     b.hidden=(['pipe','inspect'].includes(b.dataset.action)&&!pipe)||(b.dataset.action==='toggle'&&!tile)||
       (b.dataset.action==='row'&&!tile&&!axisRow)||(b.dataset.action==='column'&&!tile&&!axisColumn);
@@ -196,7 +259,14 @@ document.addEventListener('keydown',e=>{
   const editing=['INPUT','TEXTAREA','SELECT'].includes(e.target?.tagName) || e.target?.isContentEditable;
   if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='z' && !e.shiftKey && !e.altKey && !editing){e.preventDefault();undo();}
 });
-async function inspect(pipe){if(!doc)throw new Error('Generate a diagram first.');const result=await api('/api/trace',{...doc,pipe});$('pipe').value=pipe;$('inspection').textContent=`Pipe ${pipe} → ${result.exit ?? 'outside'}\n${result.turns.length} turns\n${JSON.stringify(result.turns)}`;if(result.turns.length===5)$('turns').value=JSON.stringify(result.turns);}
+function displayInspection(){
+  if(!lastInspection)return;
+  const result=lastInspection;
+  const black=result.turns.map(([r,c])=>[r,topPipes[c-1]||0]);
+  $('inspection').textContent=`Pipe ${result.pipe} → column ${result.exit ?? 'outside'}\n${result.turns.length} turns\nGrid: ${JSON.stringify(result.turns)}\nBlack (Y, X): ${JSON.stringify(black)}\nBlue (Y, X): ${JSON.stringify(convertTurns(result.turns,doc.n,'grid','edge'))}`;
+  if(result.turns.length===5){coordinateMode=selectedCoordinates();$('n').value=doc.n;$('turns').value=JSON.stringify(convertTurns(result.turns,doc.n,'grid',coordinateMode));}
+}
+async function inspect(pipe){if(!doc)throw new Error('Generate a diagram first.');lastInspection=await api('/api/trace',{...doc,pipe});$('pipe').value=pipe;displayInspection();}
 $('menu').addEventListener('click',e=>{const action=e.target.dataset.action;if(!action || busy || !selected)return;$('menu').hidden=true;
   if(action==='toggle')return run(async()=>{const next=await api('/api/toggle',{...doc,row:selected.r+1,column:selected.c+1});remember();adopt(next);});
   if(action==='inspect')return run(()=>inspect(selected.pipe));
@@ -218,9 +288,9 @@ $('randomize').onclick=()=>run(async()=>{
   adopt(next);
 });
 $('constrained').onclick=()=>run(async()=>{
-  const turns=JSON.parse($('turns').value), seconds=Number($('seconds').value);
+  const input=prescribedInput(), seconds=Number($('seconds').value);
   if(!Number.isFinite(seconds)||seconds<.1||seconds>3600)throw new Error('Enter a search time from 0.1 to 3,600 seconds.');
-  const input={...generationInput(),pipe:Number($('pipe').value),turns,seconds};
+  input.seconds=seconds;
   const started=Date.now();
   const progress=()=>status(`Finding a completion and applying moves… ${Math.floor((Date.now()-started)/1000)}s elapsed · Search limit ${seconds}s`);
   progress(); $('cancel-search').disabled=false;
@@ -234,6 +304,14 @@ $('cancel-search').onclick=async()=>{
   catch(e){status(e.message,true);}
 };
 $('inspect').onclick=()=>run(()=>inspect(Number($('pipe').value)));
+$('axes').onchange=()=>{const previous=margin;axisView=$('axes').value;margin=bandSize*axisBands().length;ox+=margin-previous;oy+=margin-previous;$('menu').hidden=true;draw();};
+$('coordinates').onchange=()=>{
+  const next=$('coordinates').value;
+  try{if($('turns').value.trim())$('turns').value=JSON.stringify(convertTurns(JSON.parse($('turns').value),Number($('n').value),coordinateMode,next));coordinateMode=next;updateEntranceFromTurns();}
+  catch(e){$('coordinates').value=coordinateMode;status(e.message,true);}
+};
+$('turns').addEventListener('input',updateEntranceFromTurns);
+$('n').addEventListener('input',updateEntranceFromTurns);
 $('fit').onclick=fit;$('plus').onclick=()=>zoom(1.3);$('minus').onclick=()=>zoom(1/1.3);
 $('detail').onclick=()=>{if(!doc)return;cell=28;ox=oy=margin+10;draw();};
 $('clear').onclick=()=>{if(doc && !busy && Object.values(annotations()).some(colors=>Object.keys(colors).length)){remember();doc.annotations={};makeOverview();draw();}};

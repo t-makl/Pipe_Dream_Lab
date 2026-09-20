@@ -36,6 +36,23 @@ Flipping one tile generally changes the permutation or reducedness. Such diagram
 
 ## Mathematical conventions
 
+### Axis labels and coordinate input
+
+The **Axis labels** selector offers **Both** (default), **Black · pipe connections**, and **Blue · triangulation edges**. With both visible, black is the outer bar and blue is the inner bar on each axis.
+
+| Labels | X axis, left to right | Y axis, top to bottom |
+|---|---|---|
+| Black pipe connections | `1, 2, N−2, N−3, …, 3, N−1, N` for a valid target diagram | `1, 2, …, N` |
+| Blue triangulation edges | `1, 2, …, N` | `N, N−1, …, 1` |
+
+Black top labels are computed from the actual routed pipes, so they also reflect connectivity after manual tile edits. Label text stays black or blue even when a row, column, or pipe is colored. Zooming out thins the displayed labels to avoid overlap; zoom in to see every index.
+
+Right-click a black label to color/inspect its connected pipe or color the corresponding grid row/column. Right-click a blue label to color its grid row/column. Both refer to the same grid; switching views preserves colors, tile edits, zoom and undo history. Tile inspection and pipe-turn inspection report grid, black-axis, and blue-axis coordinates together.
+
+Prescribed turns have a separate **Turn coordinates** selector: grid `(row,column)`, black `(Y,X)`, or blue `(Y,X)`. Choose the format before pasting coordinates; changing this selector converts existing valid input. For grid coordinate `(r,c)`, blue coordinates are `(N+1−r,c)` and black coordinates for the target are `(r,w₀,₂(c))`. Prescribed black coordinates always refer to the target permutation, even if the current displayed diagram is an invalid draft. The **Entrance pipe** field uses the black pipe number and is automatically derived from the first turn when generating a prescribed diagram: Y for grid/black, or N+1−Y for blue. It can still be entered manually for pipe inspection. Submission reads the visible coordinate selector directly. Loading a saved prescribed diagram restores its turns in the selected format and restores its entrance pipe. The backend and saved/exported diagrams continue to use canonical grid coordinates; view selection does not reinterpret saved data.
+
+### Grid and tiles
+
 Rows are numbered downwards and columns rightwards, both starting at 1.
 The staircase contains `(r,c)` with `r+c ≤ N+1`; its row lengths are N through 1.
 Pipes enter from the west in rows 1 through N and leave through the north.

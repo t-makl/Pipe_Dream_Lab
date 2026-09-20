@@ -49,7 +49,7 @@ async function main() {
     const exits = vm.runInContext('Array.from({length:doc.n},(_,c)=>doc.rows[0][c]==="1"?south[0][c]:west[0][c])',sandbox);
     assert.deepEqual(Array.from(exits),board.validation.permutation);
     if(n===12) {
-      vm.runInContext('cell=28;ox=oy=45;',sandbox);
+      vm.runInContext('cell=28;ox=oy=margin+10;',sandbox);
       let r=board.rows.findIndex(row=>row.includes('1')), c=board.rows[r].indexOf('1');
       pointer(r,c);
       assert.match(element('tile-title').textContent,/Cross/);
@@ -59,7 +59,7 @@ async function main() {
       const previousInfo=element('tile-title').textContent;
       pointer(0,0,30,20);
       assert.equal(element('tile-title').textContent,previousInfo); // Pan is not a click.
-      vm.runInContext('ox=oy=45;',sandbox);
+      vm.runInContext('ox=oy=margin+10;',sandbox);
       pointer(11,0);
       assert.match(element('tile-pipes').textContent,/Outer boundary/);
       assert.ok(!element('tile-pipes').textContent.includes('Pipe 0'));
@@ -117,6 +117,45 @@ async function main() {
     assert.equal(vm.runInContext('doc.randomization.non_elementary',sandbox),0);
     console.log(`Frontend routing / overview / detailed render / colors passed at N=${n}`);
   }
+  // Both bars, their interaction targets, and coordinate round trips.
+  assert.equal(vm.runInContext('axisValue("pipe","x",2)',sandbox),998);
+  assert.equal(vm.runInContext('axisValue("pipe","y",2)',sandbox),3);
+  assert.equal(vm.runInContext('axisValue("edge","x",2)',sandbox),3);
+  assert.equal(vm.runInContext('axisValue("edge","y",2)',sandbox),998);
+  vm.runInContext('cell=28;ox=oy=margin+10;',sandbox);
+  const [ax,ay]=vm.runInContext('[ox+2.5*cell,oy+2.5*cell]',sandbox);
+  let hit=vm.runInContext(`axisHit(${ax},18)`,sandbox);
+  assert.equal(hit.kind,'pipe');assert.equal(hit.value,998);
+  hit=vm.runInContext(`axisHit(${ax},54)`,sandbox);
+  assert.equal(hit.kind,'edge');assert.equal(hit.value,3);
+  hit=vm.runInContext(`axisHit(54,${ay})`,sandbox);
+  assert.equal(hit.value,998);
+  element('canvas').events.contextmenu({offsetX:ax,offsetY:18,clientX:ax,clientY:18,preventDefault(){}});
+  assert.equal(vm.runInContext('selected.pipe',sandbox),998);
+  element('color').value='#2468ac';
+  element('menu').events.click({target:{dataset:{action:'pipe'}}});
+  assert.equal(vm.runInContext('doc.annotations.pipes[998]',sandbox),'#2468ac');
+  shortcut();
+  element('canvas').events.contextmenu({offsetX:54,offsetY:ay,clientX:54,clientY:ay,preventDefault(){}});
+  assert.equal(vm.runInContext('selected.pipe',sandbox),0);
+  element('menu').events.click({target:{dataset:{action:'row'}}});
+  assert.equal(vm.runInContext('doc.annotations.rows[3]',sandbox),'#2468ac');
+  shortcut();
+  const before=vm.runInContext('JSON.stringify(doc.rows)',sandbox);
+  for(const view of ['pipe','edge','both']) {
+    element('axes').value=view;element('axes').onchange();
+    assert.equal(vm.runInContext('margin',sandbox),view==='both'?72:36);
+    vm.runInContext('render()',sandbox);
+    assert.equal(vm.runInContext('JSON.stringify(doc.rows)',sandbox),before);
+  }
+  element('n').value='100';
+  element('turns').value='[[39,19],[19,19],[19,39],[1,39],[1,62]]';
+  element('coordinates').value='edge';element('coordinates').onchange();
+  assert.deepEqual(JSON.parse(element('turns').value),[[62,19],[82,19],[82,39],[100,39],[100,62]]);
+  element('coordinates').value='pipe';element('coordinates').onchange();
+  assert.deepEqual(JSON.parse(element('turns').value),[[39,82],[19,82],[19,62],[1,62],[1,39]]);
+  element('coordinates').value='grid';element('coordinates').onchange();
+  assert.deepEqual(JSON.parse(element('turns').value),[[39,19],[19,19],[19,39],[1,39],[1,62]]);
   element('n').value='100';element('pipe').value='39';element('moves').value='0';
   element('turns').value='[[39,19],[19,19],[19,39],[1,39],[1,62]]';
   element('seconds').value='600';element('mode').value='general';
@@ -125,7 +164,30 @@ async function main() {
   assert.equal(vm.runInContext('doc.validation.valid',sandbox),true);
   assert.equal(vm.runInContext('doc.constraint.pipe',sandbox),39);
   assert.equal(element('cancel-search').disabled,true);
+  await vm.runInContext('inspect(39)',sandbox);
+  assert.ok(element('inspection').textContent.includes('Black (Y, X): [[39,82]'));
+  for(const mode of ['edge','pipe']) {
+    element('coordinates').value=mode;element('coordinates').onchange();
+    await element('constrained').onclick();
+    assert.equal(vm.runInContext('doc.validation.valid',sandbox),true);
+    assert.equal(vm.runInContext('JSON.stringify(doc.constraint.turns)',sandbox),'[[39,19],[19,19],[19,39],[1,39],[1,62]]');
+  }
   console.log('Long-budget prescribed search UI passed.');
+  // A directly pasted blue path determines pipe 41, even if the old entrance
+  // field or cached selector state still describes a previous diagram.
+  element('coordinates').value='edge';
+  element('turns').value='[[60,20],[80,20],[80,40],[100,40],[100,60]]';
+  element('pipe').value='3';
+  await element('constrained').onclick();
+  assert.equal(vm.runInContext('doc.constraint.pipe',sandbox),41,element('status').textContent);
+  assert.equal(vm.runInContext('JSON.stringify(doc.constraint.turns)',sandbox),'[[41,20],[21,20],[21,40],[1,40],[1,60]]');
+  sandbox.savedStar=vm.runInContext('doc',sandbox);
+  element('pipe').value='3';element('turns').value='';
+  vm.runInContext('adopt(savedStar,true)',sandbox);
+  assert.equal(Number(element('pipe').value),41);
+  assert.deepEqual(JSON.parse(element('turns').value),[[60,20],[80,20],[80,40],[100,40],[100,60]]);
+  await element('constrained').onclick();
+  assert.equal(vm.runInContext('doc.constraint.pipe',sandbox),41);
 }
 module.exports = main();
 if (require.main === module) module.exports.catch(error=>{console.error(error);process.exitCode=1;});
